@@ -1,0 +1,11 @@
+/*Wifi Config*/
+#define WIFI_SSID "your-wifi-ssid"
+#define WIFI_PASSWORD "your-wifi-password"
+
+/*Supabase Database Config*/
+#define SUPABASE_URL "supabase-url"
+#define SUPABASE_ANON_KEY "supabase-anon-key"
+#define DB_TABLE "db-table"
+
+#define EMAIL "email" // User email set up in supabase 
+#define PASSWORD "password" // User password set up in supabase
