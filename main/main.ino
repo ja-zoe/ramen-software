@@ -12,13 +12,14 @@
 
 struct sensor_reading_t {
     float pm1;
-    float pm2f
+    float pm2;
     float pm4;
     float pm10;
     float humidity;
     float temp;
     float voc; 
-    float nox
+    float nox;
+    String captured_at; // Added for timestamping
 };
 
 enum measurement_err_t {
@@ -26,11 +27,13 @@ enum measurement_err_t {
     MEAS_FAIL
 };
 
-RTC_DATA_ATTR int sampleCount = 0;
-RTC_DATA_ATTR sensor_reading_t sensor_readings[SAMPLES_PER_TRANSMISSION] = {};
+static int sampleCount = 0;
+static sensor_reading_t sensor_readings[SAMPLES_PER_TRANSMISSION] = {};
 
-SensirionI2CSen5x sen5x;
+static SensirionI2CSen5x sen5x;
 static struct sensor_reading_t sensor_reading;
+static Supabase db;
+static String macAddress;
 
 void init_sen5x() {
     sen5x.begin(Wire);
@@ -109,10 +112,22 @@ measurement_err_t measure(sensor_reading_t *sensor_reading) {
         massConcentrationPm10p0, ambientHumidity, ambientTemperature, vocIndex,
         noxIndex);
 
+    struct tm timeinfo;
+    if(!getLocalTime(&timeinfo)){
+        sensor_reading->captured_at = ""; // Or handle as null
+    } else {
+        char timeString[64];
+        // Format for Postgres: YYYY-MM-DD HH:MM:SS
+        strftime(timeString, sizeof(timeString), "%Y-%m-%d %H:%M:%S", &timeinfo);
+        sensor_reading->captured_at = String(timeString);
+    }
+
     if (error) {
         Serial.print("Error trying to execute readMeasuredValues(): ");
         errorToString(error, errorMessage, 256);
         Serial.println(errorMessage);
+        // Log the specific sensor error before returning
+        log_event("SENSOR_ERROR", "CRITICAL", "Failed to read from SEN5x");
         return MEAS_FAIL;
     } else { 
         sensor_reading->pm1 = massConcentrationPm1p0;
@@ -123,6 +138,7 @@ measurement_err_t measure(sensor_reading_t *sensor_reading) {
         sensor_reading->temp = ambientTemperature;
         sensor_reading->voc = vocIndex;
         sensor_reading->nox = noxIndex;
+
         return MEAS_OK;
     }
 }
@@ -135,14 +151,99 @@ void init_wifi() {
         delay(100);
         Serial.print(".");
     }
+
+    macAddress = WiFi.macAddress();
     Serial.println("\nConnected!");
 }
 
-void init_db() {
-    Supabase db;
+void init_supabase() {
     db.begin(SUPABASE_URL, SUPABASE_ANON_KEY);
     db.urlQuery_reset();
     db.login_email(EMAIL, PASSWORD);
+}
+
+void register_node() {
+    db.urlQuery_reset(); // Start clean
+    Serial.println("Checking for existing node...");
+    
+    String read = db.from(NODES_TABLE).select("mac_address").eq("mac_address", macAddress).doSelect();
+    
+    // Check if the response is "[]" (empty array) or actually empty
+    if(read == "[]" || read == "") {
+        Serial.println("Mac address doesn't exist. Registering...");
+        
+        JsonDocument doc;
+        doc["mac_address"] = macAddress; // Match your DB column name
+        doc["sensor_model"] = SENSOR_MODEL;
+        doc["firmware_version"] = FIRMWARE_VERSION;
+        
+        String json;
+        serializeJson(doc, json);
+        
+        // Use your insert method
+        db.insert(NODES_TABLE, json, false); 
+    } else {
+        Serial.println("Node already registered.");
+    }
+    
+    db.urlQuery_reset();
+}
+
+void insert_sensor_reading() {
+    db.urlQuery_reset();
+    
+    // DEBUG: Check values before putting them in JSON
+    Serial.print("Debug - PM1 value: "); Serial.println(sensor_reading.pm1);
+    Serial.print("Debug - MAC: "); Serial.println(WiFi.macAddress());
+
+    JsonDocument doc; // Ensure you are using ArduinoJson 7
+
+    doc["node_id"] = macAddress;
+    doc["pm1_0"] = sensor_reading.pm1;
+    doc["pm2_5"] = sensor_reading.pm2;
+    doc["pm4_0"] = sensor_reading.pm4;
+    doc["pm10_0"] = sensor_reading.pm10;
+    doc["humidity"] = sensor_reading.humidity;
+    doc["temperature"] = sensor_reading.temp;
+    doc["voc_index"] = sensor_reading.voc;
+    doc["nox_index"] = sensor_reading.nox;
+    
+    // Check if timestamp is actually set
+    if (sensor_reading.captured_at.length() > 0) {
+        doc["captured_at"] = sensor_reading.captured_at;
+    }
+
+    String json;
+    serializeJson(doc, json);
+
+    // DEBUG: This will tell us if the JSON was actually built
+    Serial.print("Built JSON: ");
+    Serial.println(json);
+
+    if (json == "{}") {
+        Serial.println("CRITICAL ERROR: JSON is empty! Check ArduinoJson version or memory.");
+        return; 
+    }
+
+    db.insert(MEASUREMENTS_TABLE, json, false);
+    db.urlQuery_reset();
+}
+
+void log_event(String type, String sev, String msg) {
+    db.urlQuery_reset();
+    JsonDocument doc;
+    
+    doc["node_id"] = macAddress;
+    doc["event_type"] = type;
+    doc["severity"] = sev;
+    doc["message"] = msg;
+    
+    String json;
+    serializeJson(doc, json);
+    
+    Serial.printf("Logging [%s]: %s\n", sev.c_str(), msg.c_str());
+    db.insert(LOGS_TABLE, json, false);
+    db.urlQuery_reset();
 }
 
 void setup() {
@@ -157,10 +258,32 @@ void setup() {
     /* Initialize sen5x */
     init_sen5x();
     delay(100);
+    /* Initialize WiFi */
+    init_wifi();
+    // This string handles the EST/EDT switch automatically for the US East Coast
+    configTime(-18000, 3600, "pool.ntp.org"); 
+    
+    init_supabase();
+    register_node();
+
+    log_event("BOOT", "INFO", "System initialized in EST");
 }
 
 void loop() {
-    static measurement_err_t = measure(&sensor_reading);
-    Serial.printf("Humidity: %f \nTemp: %f \nVOC: %f \nNOX: %f \nPM1: %f \nPM2: %f \nPM4: %f \nPM10: %f\n", sensor_reading.humidity, sensor_reading.temp, sensor_reading.voc, sensor_reading.nox, sensor_reading.pm1, sensor_reading.pm2, sensor_reading.pm4, sensor_reading.pm10);
+    measurement_err_t measure_err = measure(&sensor_reading);
+    
+    if (measure_err == MEAS_OK) {
+        Serial.println("Measurement successful. Uploading...");
+        insert_sensor_reading();
+    } else {
+        Serial.println("Measurement failed. Logging error to database...");
+        
+        log_event("SENSOR_READ_ERROR", "CRITICAL", "SEN5x timed out or failed to return data.");
+        
+        delay(5000); 
+    }
+
     Serial.println("--------------------------------------------------------------------");
+    
+    delay(MEASUREMENT_INTERVAL * 1000);
 }
