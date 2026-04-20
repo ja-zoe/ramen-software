@@ -35,65 +35,32 @@ static struct sensor_reading_t sensor_reading;
 static Supabase db;
 static String macAddress;
 
-void init_sen5x() {
-    sen5x.begin(Wire);
-
-    uint16_t error;
-    char errorMessage[256];
-    error = sen5x.deviceReset();
-    if (error) {
-        Serial.print("Error trying to execute deviceReset(): ");
-        errorToString(error, errorMessage, 256);
-        Serial.println(errorMessage);
-    }
-
-    float tempOffset = 0.0;
-    error = sen5x.setTemperatureOffsetSimple(tempOffset);
-    if (error) {
-        Serial.print("Error trying to execute setTemperatureOffsetSimple(): ");
-        errorToString(error, errorMessage, 256);
-        Serial.println(errorMessage);
-    } else {
-        Serial.print("Temperature Offset set to ");
-        Serial.print(tempOffset);
-        Serial.println(" deg. Celsius (SEN54/SEN55 only)");
-    }
-
-    // Start Measurement
-    error = sen5x.startMeasurement();
-    if (error) {
-        Serial.print("Error trying to execute startMeasurement(): ");
-        errorToString(error, errorMessage, 256);
-        Serial.println(errorMessage);
-    }
-}
-
 measurement_err_t measure(sensor_reading_t *sensor_reading) {
     uint16_t error;
     char errorMessage[256];
 
     // Wait for data to be ready (up to SENSOR_READING_TIMEOUT seconds)
     bool dataReady = false;
-    Serial.println("Waiting for sensor data...");
+    //Serial.println("Waiting for sensor data...");
     
     for (int i = 0; i < SENSOR_READING_TIMEOUT * 100; i++) {
         error = sen5x.readDataReady(dataReady);
         if (error) {
-            Serial.print("Error trying to execute startMeasurement(): ");
-            errorToString(error, errorMessage, 256);
-            Serial.println(errorMessage);
+            //Serial.print("Error trying to execute startMeasurement(): ");
+            //errorToString(error, errorMessage, 256);
+            //Serial.println(errorMessage);
             dataReady = false;
         }
 
         if(dataReady) {
-            Serial.println("Sensor Data Ready!!");
+            //Serial.println("Sensor Data Ready!!");
             delay(10);
             break;
         }
         delay(10);
     }
     if(!dataReady) {
-        Serial.printf("Sensor measurement timeout exceeded after %u seconds", SENSOR_READING_TIMEOUT);
+        //Serial.printf("Sensor measurement timeout exceeded after %u seconds", SENSOR_READING_TIMEOUT);
         return MEAS_FAIL;
     };
 
@@ -123,9 +90,9 @@ measurement_err_t measure(sensor_reading_t *sensor_reading) {
     }
 
     if (error) {
-        Serial.print("Error trying to execute readMeasuredValues(): ");
-        errorToString(error, errorMessage, 256);
-        Serial.println(errorMessage);
+        //Serial.print("Error trying to execute readMeasuredValues(): ");
+        //errorToString(error, errorMessage, 256);
+        //Serial.println(errorMessage);
         // Log the specific sensor error before returning
         log_event("SENSOR_ERROR", "CRITICAL", "Failed to read from SEN5x");
         return MEAS_FAIL;
@@ -144,16 +111,16 @@ measurement_err_t measure(sensor_reading_t *sensor_reading) {
 }
 
 void init_wifi() {
-    Serial.print("Connecting to WiFi");
+    //Serial.print("Connecting to WiFi");
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
     while (WiFi.status() != WL_CONNECTED)
     {
         delay(100);
-        Serial.print(".");
+        //Serial.print(".");
     }
 
     macAddress = WiFi.macAddress();
-    Serial.println("\nConnected!");
+    //Serial.println("\nConnected!");
 }
 
 void init_supabase() {
@@ -163,27 +130,26 @@ void init_supabase() {
 }
 
 void register_node() {
-    db.urlQuery_reset(); // Start clean
-    Serial.println("Checking for existing node...");
+    db.urlQuery_reset();
+    //Serial.println("Checking for existing node...");
     
     String read = db.from(NODES_TABLE).select("mac_address").eq("mac_address", macAddress).doSelect();
     
     // Check if the response is "[]" (empty array) or actually empty
     if(read == "[]" || read == "") {
-        Serial.println("Mac address doesn't exist. Registering...");
+        //Serial.println("Mac address doesn't exist. Registering...");
         
         JsonDocument doc;
-        doc["mac_address"] = macAddress; // Match your DB column name
+        doc["mac_address"] = macAddress;
         doc["sensor_model"] = SENSOR_MODEL;
         doc["firmware_version"] = FIRMWARE_VERSION;
         
         String json;
         serializeJson(doc, json);
         
-        // Use your insert method
         db.insert(NODES_TABLE, json, false); 
     } else {
-        Serial.println("Node already registered.");
+        //Serial.println("Node already registered.");
     }
     
     db.urlQuery_reset();
@@ -191,12 +157,8 @@ void register_node() {
 
 void insert_sensor_reading() {
     db.urlQuery_reset();
-    
-    // DEBUG: Check values before putting them in JSON
-    Serial.print("Debug - PM1 value: "); Serial.println(sensor_reading.pm1);
-    Serial.print("Debug - MAC: "); Serial.println(WiFi.macAddress());
 
-    JsonDocument doc; // Ensure you are using ArduinoJson 7
+    JsonDocument doc;
 
     doc["node_id"] = macAddress;
     doc["pm1_0"] = sensor_reading.pm1;
@@ -216,12 +178,10 @@ void insert_sensor_reading() {
     String json;
     serializeJson(doc, json);
 
-    // DEBUG: This will tell us if the JSON was actually built
-    Serial.print("Built JSON: ");
-    Serial.println(json);
+    //Serial.println(json);
 
     if (json == "{}") {
-        Serial.println("CRITICAL ERROR: JSON is empty! Check ArduinoJson version or memory.");
+        //Serial.println("CRITICAL ERROR: JSON is empty! Check ArduinoJson version or memory.");
         return; 
     }
 
@@ -241,17 +201,48 @@ void log_event(String type, String sev, String msg) {
     String json;
     serializeJson(doc, json);
     
-    Serial.printf("Logging [%s]: %s\n", sev.c_str(), msg.c_str());
+    //Serial.printf("Logging [%s]: %s\n", sev.c_str(), msg.c_str());
     db.insert(LOGS_TABLE, json, false);
     db.urlQuery_reset();
 }
 
+void init_sen5x() {
+    sen5x.begin(Wire);
+    uint16_t error;
+    char errorMessage[256];
+
+    // --- Reset ---
+    error = sen5x.deviceReset();
+    if (error) {
+        errorToString(error, errorMessage, 256);
+        log_event("SENSOR_ERROR", "CRITICAL", "Reset failed: " + String(errorMessage));
+    }
+
+    // --- Temperature Offset ---
+    float tempOffset = 0.0;
+    error = sen5x.setTemperatureOffsetSimple(tempOffset);
+    if (error) {
+        errorToString(error, errorMessage, 256);
+        log_event("SENSOR_ERROR", "WARNING", "Offset failed: " + String(errorMessage));
+    }
+
+    // --- Start Measurement ---
+    error = sen5x.startMeasurement();
+    if (error) {
+        errorToString(error, errorMessage, 256);
+        log_event("SENSOR_ERROR", "CRITICAL", "Start failed: " + String(errorMessage));
+    } else {
+        // Log a successful boot event if you want
+        log_event("BOOT", "INFO", "SEN5x started successfully.");
+    }
+}
+
 void setup() {
     /* Initialize Serial bus*/
-    Serial.begin(115200);
-    while (!Serial) {
-        delay(100);
-    }
+    // Serial.begin(115200);
+    // while (!Serial) {
+    //     delay(100);
+    // }
     /* Initialize I2C */
     Wire.begin(SDA_PIN, SCL_PIN);
     delay(100);
@@ -270,20 +261,22 @@ void setup() {
 }
 
 void loop() {
+    if (WiFi.status() != WL_CONNECTED) {
+        init_wifi();
+        delay(30);
+    }
     measurement_err_t measure_err = measure(&sensor_reading);
     
     if (measure_err == MEAS_OK) {
-        Serial.println("Measurement successful. Uploading...");
+        // Serial.println("Measurement successful. Uploading...");
         insert_sensor_reading();
     } else {
-        Serial.println("Measurement failed. Logging error to database...");
+        //Serial.println("Measurement failed. Logging error to database...");
         
         log_event("SENSOR_READ_ERROR", "CRITICAL", "SEN5x timed out or failed to return data.");
         
         delay(5000); 
     }
-
-    Serial.println("--------------------------------------------------------------------");
     
     delay(MEASUREMENT_INTERVAL * 1000);
 }
